@@ -6,6 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/types.h>
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
@@ -24,19 +25,28 @@ static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 
-static long long fib_sequence(long long k)
+/* Calculating fibonacci numbers by fast doubling */
+static uint64_t fib_sequence(long long n)
 {
-    /* FIXME: C99 variable-length array (VLA) is not allowed in Linux kernel. */
-    long long f[k + 2];
+    /* The MSB of n */
+    int i = 31 - __builtin_clzll(n);
 
-    f[0] = 0;
-    f[1] = 1;
+    uint64_t a = 0; /* f(0) = 0 */
+    uint64_t b = 1; /* f(1) = 1 */
 
-    for (int i = 2; i <= k; i++) {
-        f[i] = f[i - 1] + f[i - 2];
+    for (int mask = 1 << i; mask; mask >>= 1) {
+        uint64_t c = a * (2 * b - a); /* f(2k) = f(k) * [2 * f(k+1) - f(k)]*/
+        uint64_t d = a * a + b * b;   /* f(2k+1) = f(k)^2 + f(k+1)^2 */
+
+        if (n & mask) {
+            a = d;
+            b = c + d; /* f(2k+2) = f(2k) + f(2k+1) = c + d */
+        } else {
+            a = c;
+            b = d;
+        }
     }
-
-    return f[k];
+    return a;
 }
 
 static int fib_open(struct inode *inode, struct file *file)
@@ -60,7 +70,13 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
+    int ret = 0;
+
+    uint64_t fib = fib_sequence(*offset);
+
+    ret = copy_to_user((void *) buf, &fib, sizeof(uint64_t));
+
+    return ret;
 }
 
 /* write operation is skipped */

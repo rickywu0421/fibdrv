@@ -8,12 +8,14 @@
 
 #define FIB_DEV "/dev/fibonacci"
 
+#define UBN_STR_SIZE 233
+
 int main()
 {
-    // char buf[1];
-    uint64_t fib;
+    char buf[UBN_STR_SIZE];
+    // ubn_t fib;
     // char write_buf[] = "testing writing";
-    int offset = 100; /* TODO: try test something bigger than the limit */
+    int offset = 1000; /* TODO: try test something bigger than the limit */
 
     int fd = open(FIB_DEV, O_RDWR);
     if (fd < 0) {
@@ -28,15 +30,15 @@ int main()
 
     for (int i = 0; i <= offset; i++) {
         lseek(fd, i, SEEK_SET);
-        if (read(fd, &fib, 1) < 0) {
+        if (read(fd, buf, UBN_STR_SIZE) < 0) {
             perror("Failed to read from character device");
             exit(1);
         }
 
         printf("Reading from " FIB_DEV
                " at offset %d, returned the sequence "
-               "%lu.\n",
-               i, fib);
+               "%s.\n",
+               i, buf);
     }
 
     /*(for (int i = offset; i >= 0; i--) {

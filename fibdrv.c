@@ -6,6 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/string.h>
 #include <linux/types.h>
 
 MODULE_LICENSE("Dual MIT/GPL");
@@ -15,32 +16,170 @@ MODULE_VERSION("0.1");
 
 #define DEV_FIBONACCI_NAME "fibonacci"
 
-/* MAX_LENGTH is set to 92 because
- * ssize_t can't fit the number > 92
- */
-#define MAX_LENGTH 92
-
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 
-/* Calculating fibonacci numbers by fast doubling */
-static uint64_t fib_sequence(long long n)
-{
-    /* The MSB of n */
-    int i = 31 - __builtin_clzll(n);
+/* Returns one plus the index of the most significant 1-bit of n */
+#define flsll(n) (64 - __builtin_clzll(n))
 
-    uint64_t a = 0; /* f(0) = 0 */
-    uint64_t b = 1; /* f(1) = 1 */
+typedef uint32_t ubn_b_t;
+typedef uint64_t ubn_b_extend_t;
+typedef struct _ubn ubn_t;
+
+#define BITS_PER_BYTE 8
+#define UBN_BLOCK_SIZE sizeof(ubn_b_t)
+#define UBN_BLOCK_EXTEND_SIZE sizeof(ubn_b_extend_t)
+#define UBN_FULL_SIZE 96
+#define UBN_BLOCK_MAX (ubn_b_t) - 1
+#define UBN_ARRAY_SIZE (UBN_FULL_SIZE / UBN_BLOCK_SIZE)
+
+/** UBN_STR_SIZE - the length of string of base 10 unsigned big number
+ *  To determine the size, we need to calculate
+ *  log(2 ^ ((UBN_BLOCK_SIZE * BITS_PER_BYTE) * UBN_ARRAY_SIZE))
+ *  which is 231.19..., we ceil it and plus 1 for null terminator
+ */
+#define UBN_STR_SIZE 233
+#define FIB_MAX 1000
+
+struct _ubn {
+    ubn_b_t arr[UBN_ARRAY_SIZE];
+};
+
+#define ubn_init(ubn) memset(ubn, 0, UBN_FULL_SIZE)
+
+#define buf_init(buf) memset(buf, '0', UBN_STR_SIZE)
+
+static inline void ubn_from_extend(ubn_t *ubn, ubn_b_extend_t tmp)
+{
+    ubn_init(ubn);
+    ubn->arr[0] = tmp;
+    ubn->arr[1] = tmp >> (BITS_PER_BYTE * UBN_BLOCK_SIZE);
+}
+
+void ubn_add(ubn_t *a, ubn_t *b, ubn_t *c)
+{
+    int carry = 0;
+    for (int i = 0; i < UBN_ARRAY_SIZE; i++) {
+        ubn_b_t tmp_a = a->arr[i];
+        c->arr[i] = a->arr[i] + b->arr[i] + carry;
+        carry = (c->arr[i] < tmp_a);
+    }
+}
+
+void ubn_sub(ubn_t *a, ubn_t *b, ubn_t *c)
+{
+    int borrow = 0;
+    for (int i = 0; i < UBN_ARRAY_SIZE; i++) {
+        ubn_b_t tmp_a = a->arr[i];
+        c->arr[i] = a->arr[i] - b->arr[i] - borrow;
+        borrow = (c->arr[i] > tmp_a);
+    }
+}
+
+void ubn_lshift_b(ubn_t *ubn, int block)
+{
+    for (int i = UBN_ARRAY_SIZE - 1; i >= block; i--)
+        ubn->arr[i] = ubn->arr[i - block];
+
+    /* Zero padding */
+    memset(ubn->arr, 0, UBN_BLOCK_SIZE * block);
+}
+
+void ubn_mul(ubn_t *a, ubn_t *b, ubn_t *c)
+{
+    ubn_init(c);
+
+    for (int i = 0; i < UBN_ARRAY_SIZE; i++) {
+        for (int j = 0; j < UBN_ARRAY_SIZE; j++) {
+            if ((i + j) < UBN_ARRAY_SIZE) {
+                ubn_t ubn;
+                ubn_b_extend_t tmp = (ubn_b_extend_t) a->arr[i] * b->arr[j];
+                ubn_from_extend(&ubn, tmp);
+                ubn_lshift_b(&ubn, i + j);
+                ubn_add(&ubn, c, c);
+            }
+        }
+    }
+}
+
+void ubn_to_str(ubn_t *ubn, char *buf)
+{
+    buf_init(buf);
+
+    /* Skip zero block */
+    int index;
+    for (index = UBN_ARRAY_SIZE - 1; !ubn->arr[index]; index--)
+        ;
+
+    for (; index >= 0; index--) {
+        for (ubn_b_t mask = 1U << ((BITS_PER_BYTE * UBN_BLOCK_SIZE) - 1); mask;
+             mask >>= 1U) {
+            int carry = ((ubn->arr[index] & mask) != 0);
+
+            for (int i = UBN_STR_SIZE - 2; i >= 0; i--) {
+                buf[i] += buf[i] + carry - '0';
+                carry = (buf[i] > '9');
+
+                if (carry)
+                    buf[i] -= 10;
+            }
+        }
+    }
+
+    buf[UBN_STR_SIZE - 1] = '\0';
+
+    /* Eliminate leading zeros in buf */
+    int offset;
+    for (offset = 0; (offset < UBN_STR_SIZE - 2) && (buf[offset] == '0');
+         offset++)
+        ;
+
+    int i;
+    for (i = 0; i < (UBN_STR_SIZE - 1 - offset); i++)
+        buf[i] = buf[i + offset];
+    buf[i] = '\0';
+}
+
+/* Calculating fibonacci numbers by fast doubling */
+/* f(2k) = f(k) * [2 * f(k+1) - f(k)]*/
+/* f(2k+1) = f(k)^2 + f(k+1)^2 */
+static ubn_t fib_sequence(long long n)
+{
+    ubn_t a, b, c, d;
+
+    if (!n) {
+        ubn_from_extend(&a, (ubn_b_extend_t) 0);
+        return a;
+    }
+
+    if (n == 1) {
+        ubn_from_extend(&a, (ubn_b_extend_t) 1);
+        return a;
+    }
+
+    /* Starting from f(1), skip the most significant 1-bit */
+    int i = (flsll(n) - 1) - 1;
+
+    ubn_from_extend(&a, (ubn_b_extend_t) 1); /* f(1) = 1 */
+    ubn_from_extend(&b, (ubn_b_extend_t) 1); /* f(2) = 1 */
 
     for (int mask = 1 << i; mask; mask >>= 1) {
-        uint64_t c = a * (2 * b - a); /* f(2k) = f(k) * [2 * f(k+1) - f(k)]*/
-        uint64_t d = a * a + b * b;   /* f(2k+1) = f(k)^2 + f(k+1)^2 */
+        ubn_t tmp1, tmp2, tmp3;
+
+        ubn_from_extend(&tmp1, (ubn_b_extend_t) 2); /* tmp1 = 2 */
+        ubn_mul(&tmp1, &b, &tmp2);                  /* tmp2 = 2 * b */
+        ubn_sub(&tmp2, &a, &tmp3);                  /* tmp3 = 2 * b - a */
+        ubn_mul(&a, &tmp3, &c);                     /* c = a * (2 * b - a) */
+
+        ubn_mul(&a, &a, &tmp1);    /* tmp1 = a * a */
+        ubn_mul(&b, &b, &tmp2);    /* tmp2 = b * b */
+        ubn_add(&tmp1, &tmp2, &d); /* d = a * a + b * b */
 
         if (n & mask) {
             a = d;
-            b = c + d; /* f(2k+2) = f(2k) + f(2k+1) = c + d */
+            ubn_add(&c, &d, &b); /* f(2k+2) = f(2k) + f(2k+1) = c + d */
         } else {
             a = c;
             b = d;
@@ -72,9 +211,12 @@ static ssize_t fib_read(struct file *file,
 {
     int ret = 0;
 
-    uint64_t fib = fib_sequence(*offset);
+    char str[UBN_STR_SIZE];
 
-    ret = copy_to_user((void *) buf, &fib, sizeof(uint64_t));
+    ubn_t fib = fib_sequence(*offset);
+    ubn_to_str(&fib, str);
+
+    ret = copy_to_user((void *) buf, str, UBN_STR_SIZE);
 
     return ret;
 }
@@ -99,12 +241,12 @@ static loff_t fib_device_lseek(struct file *file, loff_t offset, int orig)
         new_pos = file->f_pos + offset;
         break;
     case 2: /* SEEK_END: */
-        new_pos = MAX_LENGTH - offset;
+        new_pos = FIB_MAX - offset;
         break;
     }
 
-    if (new_pos > MAX_LENGTH)
-        new_pos = MAX_LENGTH;  // max case
+    if (new_pos > FIB_MAX)
+        new_pos = FIB_MAX;  // max case
     if (new_pos < 0)
         new_pos = 0;        // min case
     file->f_pos = new_pos;  // This is what we'll use now

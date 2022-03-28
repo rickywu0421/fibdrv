@@ -16,12 +16,17 @@ MODULE_DESCRIPTION("Fibonacci engine driver");
 MODULE_VERSION("0.1");
 
 #define DEV_FIBONACCI_NAME "fibonacci"
+#define FIB_MAX 1000
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
-static ktime_t kt = 0;
+static ktime_t kt_fib = 0;
+static ktime_t kt_copy = 0;
+static int read_opt = 0;
+
+enum { READ_FIB_STR, READ_KT_FIB, READ_KT_COPY };
 
 /* Returns one plus the index of the most significant 1-bit of n */
 #define flsll(n) (64 - __builtin_clzll(n))
@@ -43,7 +48,6 @@ typedef struct _ubn ubn_t;
  *  which is 231.19..., we ceil it and plus 1 for null terminator
  */
 #define UBN_STR_SIZE 233
-#define FIB_MAX 1000
 
 struct _ubn {
     ubn_b_t arr[UBN_ARRAY_SIZE];
@@ -205,6 +209,8 @@ static int fib_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+long long kt_fib_long, kt_copy_long;
+
 /* calculate the fibonacci number at given offset */
 static ssize_t fib_read(struct file *file,
                         char *buf,
@@ -212,18 +218,35 @@ static ssize_t fib_read(struct file *file,
                         loff_t *offset)
 {
     int ret = 0;
-
     char str[UBN_STR_SIZE];
 
-    kt = ktime_get();
-    ubn_t fib = fib_sequence(*offset);
-    ubn_to_str(&fib, str);
-    kt = ktime_sub(ktime_get(), kt);
+    switch (read_opt) {
+    case READ_FIB_STR:
+        kt_fib = ktime_get();
+        ubn_t fib = fib_sequence(*offset);
+        ubn_to_str(&fib, str);
+        kt_fib = ktime_sub(ktime_get(), kt_fib);
+        kt_fib_long = ktime_to_ns(kt_fib);
 
-    printk(KERN_INFO "%llu\n", ktime_to_ns(kt));
+        unsigned long len = strlen(str) + 1;
 
-    unsigned long len = strlen(str) + 1;
-    ret = copy_to_user((void *) buf, str, len);
+        kt_copy = ktime_get();
+        ret = copy_to_user((void *) buf, str, len);
+        kt_copy = ktime_sub(ktime_get(), kt_copy);
+        kt_copy_long = ktime_to_ns(kt_copy);
+
+        break;
+    case READ_KT_FIB:
+        ret = copy_to_user((void *) buf, &kt_fib_long, sizeof(long long));
+        break;
+    case READ_KT_COPY:
+        ret = copy_to_user((void *) buf, &kt_copy_long, sizeof(long long));
+        break;
+    default:
+        return -1;
+    }
+
+    read_opt = (read_opt + 1) % 3;
 
     return ret;
 }
@@ -314,6 +337,7 @@ static int __init init_fib_dev(void)
         rc = -4;
         goto failed_device_create;
     }
+
     return rc;
 failed_device_create:
     class_destroy(fib_class);
@@ -326,6 +350,7 @@ failed_cdev:
 
 static void __exit exit_fib_dev(void)
 {
+    // kobject_put(fib_kobj);
     mutex_destroy(&fib_mutex);
     device_destroy(fib_class, fib_dev);
     class_destroy(fib_class);

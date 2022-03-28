@@ -4,6 +4,7 @@
 #include <linux/init.h>
 #include <linux/kdev_t.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
@@ -20,6 +21,7 @@ static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
+static ktime_t kt = 0;
 
 /* Returns one plus the index of the most significant 1-bit of n */
 #define flsll(n) (64 - __builtin_clzll(n))
@@ -213,10 +215,15 @@ static ssize_t fib_read(struct file *file,
 
     char str[UBN_STR_SIZE];
 
+    kt = ktime_get();
     ubn_t fib = fib_sequence(*offset);
     ubn_to_str(&fib, str);
+    kt = ktime_sub(ktime_get(), kt);
 
-    ret = copy_to_user((void *) buf, str, UBN_STR_SIZE);
+    printk(KERN_INFO "%llu\n", ktime_to_ns(kt));
+
+    unsigned long len = strlen(str) + 1;
+    ret = copy_to_user((void *) buf, str, len);
 
     return ret;
 }

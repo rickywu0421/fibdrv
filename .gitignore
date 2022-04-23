@@ -29,6 +29,5 @@ dkms.conf
 # test-oriented
 client
 out
-
+fib_time
 fib_output
-ktime/

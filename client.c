@@ -9,10 +9,7 @@
 
 #define FIB_DEV "/dev/fibonacci"
 #define FIB_OUTPUT "fib_output"
-#define KTIME_DIR "ktime"
-#define KTIME_FIB_KERN "fib_kern"
-#define KTIME_FIB_USER "fib_user"
-#define KTIME_FIB_COPY "fib_copy"
+#define FIB_TIME "fib_time"
 
 #define UBN_STR_SIZE 233
 #define FIB_MAX 1000
@@ -30,11 +27,9 @@ struct timespec get_diff(struct timespec start, struct timespec end)
 int main()
 {
     char buf[UBN_STR_SIZE];
-    // ubn_t fib;
-    // char write_buf[] = "testing writing";
-    int offset = 1000; /* TODO: try test something bigger than the limit */
+    int offset = 1000;
     long long kt_fib, kt_copy;
-    FILE *fib_output_fp, *fib_kern_fp, *fib_user_fp, *fib_copy_fp;
+    FILE *fib_output_fp, *fib_time_fp;
     struct timespec start, end;
 
     int fd = open(FIB_DEV, O_RDWR);
@@ -45,19 +40,12 @@ int main()
 
 
     fib_output_fp = fopen(FIB_OUTPUT, "w");
-    fib_kern_fp = fopen(KTIME_DIR "/" KTIME_FIB_KERN, "w");
-    fib_user_fp = fopen(KTIME_DIR "/" KTIME_FIB_USER, "w");
-    fib_copy_fp = fopen(KTIME_DIR "/" KTIME_FIB_COPY, "w");
+    fib_time_fp = fopen(FIB_TIME, "w");
 
-    if (!fib_kern_fp || !fib_user_fp || !fib_copy_fp) {
+    if (!fib_output_fp || !fib_time_fp) {
         perror("Failed to open file for writing");
         exit(1);
     }
-
-    /*for (int i = 0; i <= offset; i++) {
-        long long sz = write(fd, write_buf, strlen(write_buf));
-        printf("Writing to " FIB_DEV ", returned the sequence %lld\n", sz);
-    }*/
 
     for (int i = 0; i <= offset; i++) {
         int ret = 0;
@@ -74,17 +62,8 @@ int main()
             exit(1);
         }
 
-
-        fprintf(fib_output_fp,
-                "Reading from " FIB_DEV
-                " at offset %d, returned the sequence "
-                "%s.\n",
-                i, buf);
-
         struct timespec diff = get_diff(start, end);
         long long ut_fib = diff.tv_nsec + diff.tv_sec * 1000000;
-
-        fprintf(fib_user_fp, "%d\t%lld\n", i, ut_fib);
 
         /* Time elapsed by fib_sequence() and ubn_to_str() */
         ret = read(fd, &kt_fib, sizeof(long long));
@@ -93,8 +72,6 @@ int main()
             exit(1);
         }
 
-        fprintf(fib_kern_fp, "%d\t%lld\n", i, kt_fib);
-
         /* Time elapsed by copy_to_user() */
         ret = read(fd, &kt_copy, sizeof(long long));
         if (ret < 0) {
@@ -102,23 +79,16 @@ int main()
             exit(1);
         }
 
-        fprintf(fib_copy_fp, "%d\t%lld\n", i, kt_copy);
+        fprintf(fib_output_fp,
+                "Reading from " FIB_DEV
+                " at offset %d, returned the sequence "
+                "%s.\n",
+                i, buf);
+        fprintf(fib_time_fp, "%d\t%lld\t%lld\t%lld\n", i, ut_fib, kt_fib,
+                kt_copy);
     }
 
-
-    /*(for (int i = offset; i >= 0; i--) {
-        lseek(fd, i, SEEK_SET);
-        sz = read(fd, buf, 1);
-        printf("Reading from " FIB_DEV
-               " at offset %d, returned the sequence "
-               "%lld.\n",
-               i, sz);
-    }*/
-
-    fclose(fib_output_fp);
-    fclose(fib_kern_fp);
-    fclose(fib_user_fp);
-    fclose(fib_copy_fp);
+    fclose(fib_time_fp);
     close(fd);
     return 0;
 }

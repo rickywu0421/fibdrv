@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import sys
+import psutil
 import subprocess
 import numpy as np
 import matplotlib.pyplot as plt
@@ -34,7 +35,8 @@ if __name__ == '__main__':
     Ys = []
 
     for i in range(runs):
-        subprocess.run('sudo ./client 2>&1 > /dev/null', shell=True)
+        # bind process on cpu0
+        subprocess.run('sudo taskset 0x1 ./client 2>&1 > /dev/null', shell=True)
         output = np.loadtxt(input_file, dtype='float').T
         Ys.append(np.delete(output, 0, 0))
 
@@ -48,7 +50,7 @@ if __name__ == '__main__':
     ax.set_ylabel('time (ns)', fontsize=16)
 
     ax.plot(X, Y[0], marker='*', markersize=3, label='user')            # user
-    ax.plot(X, Y[1], marker='+', markersize=7, label='kernel')          # kernel
+    ax.plot(X, Y[1], marker='+', markersize=3, label='kernel')          # kernel
     ax.plot(X, Y[2], marker='^', markersize=3, label='kernel to user')  # kernel to user
 
     ax.legend(loc = 'upper left')

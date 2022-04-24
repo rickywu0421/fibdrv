@@ -53,6 +53,6 @@ if __name__ == '__main__':
 
     ax.legend(loc = 'upper left')
 
-    plt.savefig(output_file)
+    plt.subplots_adjust(bottom=0.15)
+    plt.savefig(output_file, bbox_inches="tight")
     plt.show()
-    
